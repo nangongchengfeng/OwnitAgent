@@ -1,0 +1,5 @@
+# Global Memory Insight
+
+[RULES]
+1. 写入记忆前先核对 memory_management_sop.md
+2. 仅记录执行验证过的关键事实与 SOP

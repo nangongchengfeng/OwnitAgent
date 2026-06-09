@@ -154,6 +154,39 @@ class MainTests(unittest.TestCase):
         self.assertIn("--- AGENTS.md ---", prompt)
         self.assertIn("agents body", prompt)
 
+    def test_ensure_memory_scaffold_creates_expected_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+
+            main.ensure_memory_scaffold(workspace_root)
+
+            self.assertTrue((workspace_root / "memory" / "memory_management_sop.md").exists())
+            self.assertTrue((workspace_root / "memory" / "global_mem_insight.txt").exists())
+            self.assertTrue((workspace_root / "memory" / "global_mem.txt").exists())
+            self.assertTrue((workspace_root / "memory" / "task_sops").is_dir())
+            self.assertTrue((workspace_root / "memory" / "tools").is_dir())
+            self.assertTrue((workspace_root / "memory" / "L4_raw_sessions").is_dir())
+
+    def test_build_system_prompt_includes_memory_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+            main.ensure_memory_scaffold(workspace_root)
+            (workspace_root / "memory" / "global_mem_insight.txt").write_text(
+                "浏览器特殊操作: browser_sop",
+                encoding="utf-8",
+            )
+            (workspace_root / "memory" / "global_mem.txt").write_text(
+                "## [PATHS]\nROOT=demo",
+                encoding="utf-8",
+            )
+
+            prompt = main.build_system_prompt(workspace_root)
+
+        self.assertIn("## Memory Context", prompt)
+        self.assertIn("global_mem_insight.txt", prompt)
+        self.assertIn("browser_sop", prompt)
+        self.assertIn("## [PATHS]", prompt)
+
     def test_record_token_usage_updates_totals(self) -> None:
         stats = main.TokenUsageStats()
         response = SimpleNamespace(
@@ -275,12 +308,103 @@ class MainTests(unittest.TestCase):
         self.assertFalse(deleted_exists)
         self.assertTrue(renamed_exists)
 
+    def test_execute_tool_can_manage_memory_files_and_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+            main.ensure_memory_scaffold(workspace_root)
+            session_memory = main.WorkingMemoryState()
+
+            write_result = main.execute_tool(
+                "write_memory",
+                {"path": "global_mem.txt", "content": "## [CONFIG]\nAPI=demo"},
+                workspace_root=workspace_root,
+                session_memory=session_memory,
+            )
+            read_result = main.execute_tool(
+                "read_memory",
+                {"path": "global_mem.txt"},
+                workspace_root=workspace_root,
+                session_memory=session_memory,
+            )
+            checkpoint_result = main.execute_tool(
+                "update_working_checkpoint",
+                {"key_info": "先确认 API 配置", "related_sop": "memory/task_sops/config_sop.md"},
+                workspace_root=workspace_root,
+                session_memory=session_memory,
+            )
+
+        self.assertIn("Written memory", write_result)
+        self.assertIn("## [CONFIG]", read_result)
+        self.assertIsInstance(checkpoint_result, main.StepOutcome)
+        self.assertEqual(session_memory.key_info, "先确认 API 配置")
+        self.assertEqual(session_memory.related_sop, "memory/task_sops/config_sop.md")
+
+    def test_write_memory_rejects_volatile_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+            main.ensure_memory_scaffold(workspace_root)
+
+            result = main.execute_tool(
+                "write_memory",
+                {"path": "global_mem.txt", "content": "时间戳: 2026-06-09 12:00:00"},
+                workspace_root=workspace_root,
+            )
+
+        self.assertIn("Error: volatile content", result)
+
+    def test_general_file_tools_reject_memory_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+            main.ensure_memory_scaffold(workspace_root)
+
+            read_result = main.execute_tool(
+                "read_file",
+                {"path": "memory/global_mem.txt"},
+                workspace_root=workspace_root,
+            )
+            write_result = main.execute_tool(
+                "write_file",
+                {"path": "memory/demo.txt", "content": "x"},
+                workspace_root=workspace_root,
+            )
+            edit_result = main.execute_tool(
+                "edit_file",
+                {
+                    "path": "memory/global_mem.txt",
+                    "old_text": "PROJECT_ROOT = .",
+                    "new_text": "PROJECT_ROOT = demo",
+                },
+                workspace_root=workspace_root,
+            )
+            delete_result = main.execute_tool(
+                "delete_file",
+                {"path": "memory/global_mem.txt"},
+                workspace_root=workspace_root,
+            )
+            rename_result = main.execute_tool(
+                "rename_file",
+                {
+                    "old_path": "memory/global_mem.txt",
+                    "new_path": "memory/global_mem_2.txt",
+                },
+                workspace_root=workspace_root,
+            )
+
+        self.assertIn("Use memory tools instead", read_result)
+        self.assertIn("Use memory tools instead", write_result)
+        self.assertIn("Use memory tools instead", edit_result)
+        self.assertIn("Use memory tools instead", delete_result)
+        self.assertIn("Use memory tools instead", rename_result)
+
     def test_tools_include_delete_and_rename(self) -> None:
         tool_names = [tool["function"]["name"] for tool in main.TOOLS]
 
         self.assertIn("delete_file", tool_names)
         self.assertIn("rename_file", tool_names)
         self.assertIn("grep_search", tool_names)
+        self.assertIn("read_memory", tool_names)
+        self.assertIn("write_memory", tool_names)
+        self.assertIn("update_working_checkpoint", tool_names)
 
     def test_execute_tool_refuses_dangerous_command(self) -> None:
         result = main.execute_tool(
@@ -367,6 +491,8 @@ class MainTests(unittest.TestCase):
             any(message.get("role") == "tool" for message in fake_completions.calls[1]["messages"])
         )
         console_text = console.export_text()
+        self.assertIn("LLM Running (Turn 1)", console_text)
+        self.assertIn("LLM Running (Turn 2)", console_text)
         self.assertIn("[1] read_file", console_text)
         self.assertIn("Done", console_text)
 
@@ -522,6 +648,21 @@ class MainTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(new_history, main.build_initial_history())
         self.assertIn("历史已清空", console.export_text())
+
+    def test_build_working_memory_prompt_folds_earlier_history(self) -> None:
+        session_memory = main.WorkingMemoryState(
+            history_info=[f"[Agent] step {index}" for index in range(35)],
+            key_info="关键进展",
+            related_sop="memory/task_sops/demo.md",
+            current_turn=35,
+        )
+
+        prompt = main.build_working_memory_prompt(session_memory)
+
+        self.assertIn("<earlier_context>", prompt)
+        self.assertIn("<history>", prompt)
+        self.assertIn("关键进展", prompt)
+        self.assertIn("memory/task_sops/demo.md", prompt)
 
 
 if __name__ == "__main__":

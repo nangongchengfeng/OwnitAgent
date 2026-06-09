@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 from typing import Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from openai import OpenAI
@@ -21,6 +21,14 @@ DEFAULT_ENV_PATH = Path(__file__).with_name(".env")
 DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
 DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
 WORKSPACE_ROOT = Path(__file__).resolve().parent
+MEMORY_DIR_NAME = "memory"
+MEMORY_ROOT = WORKSPACE_ROOT / MEMORY_DIR_NAME
+MEMORY_L0_FILE = "memory_management_sop.md"
+MEMORY_L1_FILE = "global_mem_insight.txt"
+MEMORY_L2_FILE = "global_mem.txt"
+WORKING_HISTORY_WINDOW = 30
+SUMMARY_MAX_LENGTH = 80
+MEMORY_REFRESH_INTERVAL = 10
 IGNORED_PATH_NAMES = {
     ".git",
     ".venv",
@@ -37,6 +45,24 @@ BASE_SYSTEM_PROMPT = (
     "You are MagicCode, a terminal AI coding assistant. "
     "Be concise and helpful. Format responses in Markdown."
 )
+DEFAULT_MEMORY_MANAGEMENT_SOP = """# Memory Management SOP
+
+1. 只有工具调用成功验证的信息才能写入记忆。
+2. 禁止把推理猜测、计划草稿、易变状态写入记忆。
+3. L1 只保留极简索引，L2 保留环境事实，L3 保留 SOP 和复用脚本。
+4. 写入记忆前，先确认信息对跨会话仍有价值。
+"""
+DEFAULT_MEMORY_INSIGHT = """# Global Memory Insight
+
+[RULES]
+1. 写入记忆前先核对 memory_management_sop.md
+2. 仅记录执行验证过的关键事实与 SOP
+"""
+DEFAULT_MEMORY_FACTS = """# Global Memory - L2
+
+## [PATHS]
+PROJECT_ROOT = .
+"""
 
 
 @dataclass(frozen=True)
@@ -57,6 +83,14 @@ class StepOutcome:
     data: Any
     next_prompt: str | None = None
     should_exit: bool = False
+
+
+@dataclass
+class WorkingMemoryState:
+    history_info: list[str] = field(default_factory=list)
+    key_info: str = ""
+    related_sop: str = ""
+    current_turn: int = 0
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -114,6 +148,31 @@ TOOLS = [
             "new_path": {"type": "string", "description": "New file path"},
         },
         ["old_path", "new_path"],
+    ),
+    _fn(
+        "read_memory",
+        "Read a memory file inside the memory directory.",
+        {"path": {"type": "string", "description": "Memory file path relative to memory/"}},
+        ["path"],
+    ),
+    _fn(
+        "write_memory",
+        "Write verified information into a memory file inside the memory directory.",
+        {
+            "path": {"type": "string", "description": "Memory file path relative to memory/"},
+            "content": {"type": "string", "description": "Verified memory content"},
+            "append": {"type": "boolean", "description": "Append instead of overwrite", "default": False},
+        },
+        ["path", "content"],
+    ),
+    _fn(
+        "update_working_checkpoint",
+        "Update working memory with the current key checkpoint and related SOP path.",
+        {
+            "key_info": {"type": "string", "description": "Short validated checkpoint summary"},
+            "related_sop": {"type": "string", "description": "Related SOP path for later reference"},
+        },
+        [],
     ),
     _fn(
         "run_command",
@@ -180,6 +239,63 @@ def build_client(settings: Settings) -> OpenAI:
     return OpenAI(api_key=settings.api_key, base_url=settings.base_url)
 
 
+def get_memory_root(workspace_root: Path = WORKSPACE_ROOT) -> Path:
+    return workspace_root / MEMORY_DIR_NAME
+
+
+def ensure_memory_scaffold(workspace_root: Path = WORKSPACE_ROOT) -> None:
+    memory_root = get_memory_root(workspace_root)
+    memory_root.mkdir(parents=True, exist_ok=True)
+    for directory in ("task_sops", "tools", "sessions", "L4_raw_sessions"):
+        (memory_root / directory).mkdir(parents=True, exist_ok=True)
+
+    defaults = {
+        MEMORY_L0_FILE: DEFAULT_MEMORY_MANAGEMENT_SOP,
+        MEMORY_L1_FILE: DEFAULT_MEMORY_INSIGHT,
+        MEMORY_L2_FILE: DEFAULT_MEMORY_FACTS,
+    }
+    for file_name, content in defaults.items():
+        path = memory_root / file_name
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
+
+
+def resolve_memory_path(path: str, workspace_root: Path = WORKSPACE_ROOT) -> Path:
+    memory_root = get_memory_root(workspace_root).resolve()
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = (memory_root / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    try:
+        candidate.relative_to(memory_root)
+    except ValueError as error:
+        raise ValueError(f"记忆路径超出 memory 目录: {path}") from error
+    return candidate
+
+
+def is_memory_path(path: Path, workspace_root: Path = WORKSPACE_ROOT) -> bool:
+    memory_root = get_memory_root(workspace_root).resolve()
+    try:
+        path.resolve().relative_to(memory_root)
+        return True
+    except ValueError:
+        return False
+
+
+def reject_memory_file_tool(path: Path, workspace_root: Path = WORKSPACE_ROOT) -> str | None:
+    if is_memory_path(path, workspace_root):
+        return "Error: memory paths are managed separately. Use memory tools instead."
+    return None
+
+
+def read_text_if_exists(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace").strip()
+
+
 def load_project_context(workspace_root: Path = WORKSPACE_ROOT) -> str:
     context_parts: list[str] = []
     for name in ["CLAUDE.md", "AGENTS.md", "README.md"]:
@@ -191,11 +307,35 @@ def load_project_context(workspace_root: Path = WORKSPACE_ROOT) -> str:
     return "\n\n".join(context_parts)
 
 
+def build_memory_context(workspace_root: Path = WORKSPACE_ROOT) -> str:
+    memory_root = get_memory_root(workspace_root)
+    if not memory_root.exists():
+        return ""
+
+    insight = read_text_if_exists(memory_root / MEMORY_L1_FILE)
+    facts = read_text_if_exists(memory_root / MEMORY_L2_FILE)
+    return (
+        "## Memory Context\n"
+        f"[Memory Root] {MEMORY_DIR_NAME}/\n"
+        f"L0: {MEMORY_DIR_NAME}/{MEMORY_L0_FILE}\n"
+        f"L1: {MEMORY_DIR_NAME}/{MEMORY_L1_FILE}\n"
+        f"L2: {MEMORY_DIR_NAME}/{MEMORY_L2_FILE}\n"
+        f"L3: {MEMORY_DIR_NAME}/task_sops/ and {MEMORY_DIR_NAME}/tools/\n\n"
+        f"[L1 Insight]\n{insight or '(empty)'}\n\n"
+        f"[L2 Facts]\n{facts or '(empty)'}"
+    )
+
+
 def build_system_prompt(workspace_root: Path = WORKSPACE_ROOT) -> str:
+    ensure_memory_scaffold(workspace_root)
+    parts = [BASE_SYSTEM_PROMPT]
     project_context = load_project_context(workspace_root)
-    if not project_context:
-        return BASE_SYSTEM_PROMPT
-    return f"{BASE_SYSTEM_PROMPT}\n\n## Project Context\n{project_context}"
+    if project_context:
+        parts.append(f"## Project Context\n{project_context}")
+    memory_context = build_memory_context(workspace_root)
+    if memory_context:
+        parts.append(memory_context)
+    return "\n\n".join(parts)
 
 
 def build_initial_history(workspace_root: Path = WORKSPACE_ROOT) -> list[dict[str, str]]:
@@ -236,6 +376,90 @@ def preview_text(text: str, limit: int = 100) -> str:
     if len(text) > limit:
         preview += "..."
     return preview
+
+
+def is_volatile_memory_content(content: str) -> bool:
+    volatile_patterns = [
+        r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2})?\b",
+        r"\bpid[:= ]\d+\b",
+        r"\bsession[_ -]?id\b",
+        r"\b当前时间\b",
+        r"\b时间戳\b",
+    ]
+    lowered = content.lower()
+    return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in volatile_patterns)
+
+
+def truncate_summary(text: str, max_len: int = SUMMARY_MAX_LENGTH) -> str:
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= max_len:
+        return compact
+    return compact[: max_len - 3] + "..."
+
+
+def extract_summary(content: str, tool_calls: list[object] | None = None) -> str:
+    if content:
+        matched = re.search(r"<summary>(.*?)</summary>", content, flags=re.DOTALL)
+        if matched:
+            return truncate_summary(matched.group(1))
+        cleaned = _clean_content(content, shrink_code_blocks=False)
+        for line in cleaned.splitlines():
+            stripped = line.strip()
+            if stripped:
+                return truncate_summary(stripped)
+    if tool_calls:
+        first_call = tool_calls[0]
+        return truncate_summary(f"调用工具 {first_call.function.name}")
+    return "完成一轮响应"
+
+
+def fold_earlier_history(lines: list[str]) -> str:
+    if not lines:
+        return ""
+    if len(lines) <= 5:
+        return "\n".join(lines)
+    return "\n".join([lines[0], f"... 共 {len(lines)} 条较早记录 ...", lines[-1]])
+
+
+def build_working_memory_prompt(session_memory: WorkingMemoryState) -> str:
+    parts: list[str] = ["### [WORKING MEMORY]"]
+    if len(session_memory.history_info) > WORKING_HISTORY_WINDOW:
+        earlier = fold_earlier_history(session_memory.history_info[:-WORKING_HISTORY_WINDOW])
+        parts.append(f"<earlier_context>\n{earlier}\n</earlier_context>")
+    history_lines = session_memory.history_info[-WORKING_HISTORY_WINDOW:]
+    if history_lines:
+        parts.append(f"<history>\n" + "\n".join(history_lines) + "\n</history>")
+    parts.append(f"Current turn: {session_memory.current_turn}")
+    if session_memory.key_info:
+        parts.append(f"<key_info>{session_memory.key_info}</key_info>")
+    if session_memory.related_sop:
+        parts.append(f"related_sop: {session_memory.related_sop}")
+    return "\n".join(parts)
+
+
+def build_runtime_messages(
+    history: list[dict[str, str]],
+    session_memory: WorkingMemoryState,
+    workspace_root: Path = WORKSPACE_ROOT,
+) -> list[dict[str, str]]:
+    messages = list(history)
+    messages.append({"role": "system", "content": build_working_memory_prompt(session_memory)})
+    if session_memory.current_turn and session_memory.current_turn % MEMORY_REFRESH_INTERVAL == 0:
+        messages.append({"role": "system", "content": build_memory_context(workspace_root)})
+    return messages
+
+
+def build_turn_message(turn: int) -> str:
+    return f"[dim]LLM Running (Turn {turn})...[/]"
+
+
+def record_working_memory(
+    session_memory: WorkingMemoryState,
+    content: str,
+    tool_calls: list[object] | None = None,
+) -> None:
+    summary = extract_summary(content, tool_calls)
+    session_memory.history_info.append(f"[Agent] {summary}")
 
 
 def _clean_content(text: str, shrink_code_blocks: bool = True) -> str:
@@ -290,10 +514,14 @@ def execute_tool(
     name: str,
     params: dict,
     workspace_root: Path = WORKSPACE_ROOT,
-) -> str:
+    session_memory: WorkingMemoryState | None = None,
+) -> Any:
     try:
         if name == "read_file":
             path = resolve_workspace_path(params["path"], workspace_root)
+            rejected = reject_memory_file_tool(path, workspace_root)
+            if rejected:
+                return rejected
             content = path.read_text(encoding="utf-8", errors="replace")
             lines = content.split("\n")
             numbered = "\n".join(
@@ -303,6 +531,9 @@ def execute_tool(
 
         if name == "write_file":
             path = resolve_workspace_path(params["path"], workspace_root)
+            rejected = reject_memory_file_tool(path, workspace_root)
+            if rejected:
+                return rejected
             path.parent.mkdir(parents=True, exist_ok=True)
             content = params["content"]
             path.write_text(content, encoding="utf-8")
@@ -310,6 +541,9 @@ def execute_tool(
 
         if name == "edit_file":
             path = resolve_workspace_path(params["path"], workspace_root)
+            rejected = reject_memory_file_tool(path, workspace_root)
+            if rejected:
+                return rejected
             content = path.read_text(encoding="utf-8", errors="replace")
             old_text = params["old_text"]
             if old_text not in content:
@@ -320,6 +554,9 @@ def execute_tool(
 
         if name == "delete_file":
             path = resolve_workspace_path(params["path"], workspace_root)
+            rejected = reject_memory_file_tool(path, workspace_root)
+            if rejected:
+                return rejected
             if not path.exists():
                 return f"Error: Path not found: {path}"
             if path.is_dir():
@@ -331,6 +568,12 @@ def execute_tool(
         if name == "rename_file":
             old_path = resolve_workspace_path(params["old_path"], workspace_root)
             new_path = resolve_workspace_path(params["new_path"], workspace_root)
+            rejected = reject_memory_file_tool(old_path, workspace_root)
+            if rejected:
+                return rejected
+            rejected = reject_memory_file_tool(new_path, workspace_root)
+            if rejected:
+                return rejected
             if not old_path.exists():
                 return f"Error: Path not found: {old_path}"
             if new_path.exists():
@@ -338,6 +581,49 @@ def execute_tool(
             new_path.parent.mkdir(parents=True, exist_ok=True)
             old_path.rename(new_path)
             return f"Renamed {old_path} -> {new_path}"
+
+        if name == "read_memory":
+            ensure_memory_scaffold(workspace_root)
+            path = resolve_memory_path(params["path"], workspace_root)
+            content = path.read_text(encoding="utf-8", errors="replace")
+            lines = content.split("\n")
+            numbered = "\n".join(
+                f"{index + 1:4d} | {line}" for index, line in enumerate(lines)
+            )
+            return f"{path} ({len(lines)} lines)\n{numbered}"
+
+        if name == "write_memory":
+            ensure_memory_scaffold(workspace_root)
+            content = params["content"]
+            if is_volatile_memory_content(content):
+                return "Error: volatile content is not allowed in memory"
+
+            path = resolve_memory_path(params["path"], workspace_root)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            append = bool(params.get("append", False))
+
+            if path.name == MEMORY_L1_FILE and not append and len(content.splitlines()) > 30:
+                return "Error: L1 insight must stay within 30 lines"
+
+            if append and path.exists() and path.read_text(encoding="utf-8", errors="replace"):
+                existing = path.read_text(encoding="utf-8", errors="replace")
+                separator = "" if existing.endswith("\n") else "\n"
+                path.write_text(existing + separator + content, encoding="utf-8")
+            else:
+                path.write_text(content, encoding="utf-8")
+            return f"Written memory to {path}"
+
+        if name == "update_working_checkpoint":
+            if session_memory is None:
+                return "Error: missing session memory"
+            if "key_info" in params:
+                session_memory.key_info = str(params.get("key_info", "")).strip()
+            if "related_sop" in params:
+                session_memory.related_sop = str(params.get("related_sop", "")).strip()
+            return StepOutcome(
+                data={"result": "working checkpoint updated"},
+                next_prompt=build_working_memory_prompt(session_memory),
+            )
 
         if name == "run_command":
             command = params["command"]
@@ -535,25 +821,31 @@ def chat(
     console: Console,
     execute_tool_fn=execute_tool,
     token_stats: TokenUsageStats | None = None,
+    session_memory: WorkingMemoryState | None = None,
 ) -> str:
+    session_memory = session_memory or WorkingMemoryState()
     history.append({"role": "user", "content": user_input})
     tool_count = 0
 
     while True:
+        session_memory.current_turn += 1
+        runtime_messages = build_runtime_messages(history, session_memory, workspace_root=WORKSPACE_ROOT)
+        console.print(build_turn_message(session_memory.current_turn))
         response = client.chat.completions.create(
             model=settings.model,
-            messages=history,
+            messages=runtime_messages,
             tools=TOOLS,
         )
         if token_stats is not None:
             record_token_usage(token_stats, response)
         message = response.choices[0].message
+        tool_calls = getattr(message, "tool_calls", None) or []
+        record_working_memory(session_memory, message.content or "", tool_calls)
         history.append(serialize_assistant_message(message))
 
         if message.content:
             console.print(build_reply_panel(message.content))
 
-        tool_calls = getattr(message, "tool_calls", None) or []
         if not tool_calls:
             return message.content or ""
 
@@ -570,6 +862,7 @@ def chat(
                 tool_name,
                 tool_args,
                 workspace_root=WORKSPACE_ROOT,
+                session_memory=session_memory,
             )
             outcome = normalize_tool_outcome(result)
             result_text = serialize_tool_data(outcome.data)
@@ -588,11 +881,13 @@ def chat(
 
 def run_chat(console: Console | None = None, live_factory=Live) -> None:
     load_env_file()
+    ensure_memory_scaffold(WORKSPACE_ROOT)
     settings = get_settings()
     client = build_client(settings)
     console = console or build_console()
     history = build_initial_history()
     token_stats = TokenUsageStats()
+    session_memory = WorkingMemoryState()
 
     console.print(build_welcome_panel(settings))
     try:
@@ -606,6 +901,7 @@ def run_chat(console: Console | None = None, live_factory=Live) -> None:
 
             handled, history = handle_control_command(user_input.lower(), console, history)
             if handled:
+                session_memory = WorkingMemoryState()
                 continue
 
             chat(
@@ -615,6 +911,7 @@ def run_chat(console: Console | None = None, live_factory=Live) -> None:
                 history,
                 console,
                 token_stats=token_stats,
+                session_memory=session_memory,
             )
     except KeyboardInterrupt:
         console.print("\n[cyan]再见！[/]")
