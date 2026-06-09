@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import chat_agent
 import main
 from rich.console import Console
 from rich.markdown import Markdown
@@ -496,6 +497,193 @@ class MainTests(unittest.TestCase):
         self.assertIn("[1] read_file", console_text)
         self.assertIn("Done", console_text)
 
+    def test_chat_streams_reply_when_no_tools_are_needed(self) -> None:
+        settings = main.Settings(
+            api_key="sk-xx",
+            model="deepseek-ai/DeepSeek-V4-Flash",
+            base_url="https://api.siliconflow.cn/v1",
+        )
+        history = [{"role": "system", "content": "system"}]
+        chunks = [
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="直", tool_calls=[]))]
+            ),
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="接", tool_calls=[]))]
+            ),
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="回", tool_calls=[]))]
+            ),
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="复", tool_calls=[]))],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=4),
+            ),
+        ]
+
+        class FakeCompletions:
+            def __init__(self, queued_chunks: list[object]) -> None:
+                self.queued_chunks = queued_chunks
+                self.calls: list[dict[str, object]] = []
+
+            def create(self, **kwargs: object) -> list[object]:
+                self.calls.append(kwargs)
+                return self.queued_chunks
+
+        class FakeLive:
+            def __init__(self, **kwargs: object) -> None:
+                self.updates: list[object] = []
+
+            def __enter__(self) -> "FakeLive":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def update(self, renderable: object) -> None:
+                self.updates.append(renderable)
+
+        fake_completions = FakeCompletions(chunks)
+        fake_client = SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
+        console = Console(record=True, width=80)
+        token_stats = main.TokenUsageStats()
+        live = FakeLive(console=console, refresh_per_second=8)
+
+        reply = main.chat(
+            "你好",
+            fake_client,
+            settings,
+            history,
+            console,
+            token_stats=token_stats,
+            live_factory=lambda **kwargs: live,
+        )
+
+        self.assertEqual(reply, "直接回复")
+        self.assertEqual(len(fake_completions.calls), 1)
+        self.assertIs(fake_completions.calls[0]["stream"], True)
+        self.assertEqual(fake_completions.calls[0]["tools"], main.TOOLS)
+        self.assertEqual(token_stats.input_tokens, 10)
+        self.assertEqual(token_stats.output_tokens, 4)
+        self.assertEqual(len(live.updates), 4)
+        self.assertIn("LLM Running (Turn 1)", console.export_text())
+
+    def test_chat_falls_back_to_non_stream_when_stream_response_is_empty(self) -> None:
+        settings = main.Settings(
+            api_key="sk-xx",
+            model="deepseek-ai/DeepSeek-V4-Flash",
+            base_url="https://api.siliconflow.cn/v1",
+        )
+        history = [{"role": "system", "content": "system"}]
+        streamed_chunks = [
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=[]))]
+            ),
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(prompt_tokens=6, completion_tokens=0),
+            ),
+        ]
+        fallback_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="补回回复",
+                        tool_calls=[],
+                    )
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=6, completion_tokens=3),
+        )
+
+        class FakeCompletions:
+            def __init__(self, stream_chunks: list[object], fallback: object) -> None:
+                self.stream_chunks = stream_chunks
+                self.fallback = fallback
+                self.calls: list[dict[str, object]] = []
+
+            def create(self, **kwargs: object) -> object:
+                self.calls.append(kwargs)
+                if kwargs.get("stream"):
+                    return self.stream_chunks
+                return self.fallback
+
+        fake_completions = FakeCompletions(streamed_chunks, fallback_response)
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+        console = Console(record=True, width=80)
+
+        reply = main.chat(
+            "你好",
+            fake_client,
+            settings,
+            history,
+            console,
+        )
+
+        self.assertEqual(reply, "补回回复")
+        self.assertEqual(len(fake_completions.calls), 2)
+        self.assertIs(fake_completions.calls[0]["stream"], True)
+        self.assertNotIn("stream", fake_completions.calls[1])
+        self.assertIn("补回回复", console.export_text())
+
+    def test_chat_reports_empty_response_in_console_and_working_memory(self) -> None:
+        settings = main.Settings(
+            api_key="sk-xx",
+            model="deepseek-ai/DeepSeek-V4-Flash",
+            base_url="https://api.siliconflow.cn/v1",
+        )
+        history = [{"role": "system", "content": "system"}]
+        session_memory = main.WorkingMemoryState()
+        streamed_chunks = [
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=[]))]
+            ),
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(prompt_tokens=5, completion_tokens=0),
+            ),
+        ]
+        fallback_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="",
+                        tool_calls=[],
+                    )
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=5, completion_tokens=0),
+        )
+
+        class FakeCompletions:
+            def __init__(self, stream_chunks: list[object], fallback: object) -> None:
+                self.stream_chunks = stream_chunks
+                self.fallback = fallback
+
+            def create(self, **kwargs: object) -> object:
+                if kwargs.get("stream"):
+                    return self.stream_chunks
+                return self.fallback
+
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=FakeCompletions(streamed_chunks, fallback_response))
+        )
+        console = Console(record=True, width=80)
+
+        reply = main.chat(
+            "你好",
+            fake_client,
+            settings,
+            history,
+            console,
+            session_memory=session_memory,
+        )
+
+        self.assertEqual(reply, "")
+        self.assertIn("模型未返回内容，也未发起工具调用", console.export_text())
+        self.assertEqual(session_memory.history_info[-1], "[Agent] 模型空响应")
+
     def test_chat_accepts_step_outcome_and_keeps_full_reply_code(self) -> None:
         settings = main.Settings(
             api_key="sk-xx",
@@ -635,6 +823,140 @@ class MainTests(unittest.TestCase):
         self.assertEqual(reply, "")
         self.assertEqual(len(executed), main.TOOL_CALL_LIMIT)
         self.assertIn("Tool call limit reached", console.export_text())
+
+    def test_chat_falls_back_to_non_stream_when_tool_json_is_incomplete(self) -> None:
+        settings = main.Settings(
+            api_key="sk-xx",
+            model="deepseek-ai/DeepSeek-V4-Flash",
+            base_url="https://api.siliconflow.cn/v1",
+        )
+        history = [{"role": "system", "content": "system"}]
+        streamed_chunks = [
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="准", tool_calls=[]))]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="备写文件",
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id="call_1",
+                                    function=SimpleNamespace(
+                                        name="write_file",
+                                        arguments='{"path":"a.md","content":"unterminated}',
+                                    ),
+                                )
+                            ],
+                        )
+                    )
+                ]
+            ),
+        ]
+        fallback_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="准备写文件",
+                        tool_calls=[
+                            SimpleNamespace(
+                                id="call_1",
+                                function=SimpleNamespace(
+                                    name="write_file",
+                                    arguments='{"path":"a.md","content":"ok"}',
+                                ),
+                            )
+                        ],
+                    )
+                )
+            ]
+        )
+        final_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="已完成写入",
+                        tool_calls=[],
+                    )
+                )
+            ]
+        )
+
+        class FakeCompletions:
+            def __init__(self, stream_chunks: list[object], fallback: object, final: object) -> None:
+                self.stream_chunks = stream_chunks
+                self.fallback = fallback
+                self.final = final
+                self.calls: list[dict[str, object]] = []
+
+            def create(self, **kwargs: object) -> object:
+                self.calls.append(kwargs)
+                if kwargs.get("stream"):
+                    if len(self.calls) == 1:
+                        return self.stream_chunks
+                    return self.final
+                return self.fallback
+
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=FakeCompletions(streamed_chunks, fallback_response, final_response)
+            )
+        )
+        console = Console(record=True, width=80)
+        executed: list[tuple[str, dict[str, str]]] = []
+
+        reply = main.chat(
+            "写入文件",
+            fake_client,
+            settings,
+            history,
+            console,
+            execute_tool_fn=lambda name, params, **_: executed.append((name, params)) or "done",
+        )
+
+        self.assertEqual(reply, "已完成写入")
+        self.assertEqual(executed, [("write_file", {"path": "a.md", "content": "ok"})])
+        console_text = console.export_text()
+        self.assertNotIn("工具参数解析失败", console_text)
+
+    def test_run_chat_keyboard_interrupt_shows_explicit_message(self) -> None:
+        original_load_env_file = chat_agent.load_env_file
+        original_ensure_memory_scaffold = chat_agent.ensure_memory_scaffold
+        original_get_settings = chat_agent.get_settings
+        original_build_client = chat_agent.build_client
+        try:
+            chat_agent.load_env_file = lambda *args, **kwargs: None
+            chat_agent.ensure_memory_scaffold = lambda *args, **kwargs: None
+            chat_agent.get_settings = lambda: main.Settings(
+                api_key="sk-xx",
+                model="deepseek-ai/DeepSeek-V4-Flash",
+                base_url="https://api.siliconflow.cn/v1",
+            )
+            chat_agent.build_client = lambda _settings: object()
+
+            class InterruptConsole:
+                def __init__(self) -> None:
+                    self.messages: list[str] = []
+
+                def print(self, *args: object, **kwargs: object) -> None:
+                    self.messages.append(" ".join(str(arg) for arg in args))
+
+                def input(self, _prompt: str) -> str:
+                    raise KeyboardInterrupt
+
+            console = InterruptConsole()
+            main.run_chat(console=console)
+
+            joined = "\n".join(console.messages)
+            self.assertIn("请求已中断", joined)
+            self.assertIn("Token 统计", joined)
+        finally:
+            chat_agent.load_env_file = original_load_env_file
+            chat_agent.ensure_memory_scaffold = original_ensure_memory_scaffold
+            chat_agent.get_settings = original_get_settings
+            chat_agent.build_client = original_build_client
 
     def test_handle_control_command_clears_history(self) -> None:
         console = Console(record=True, width=80)

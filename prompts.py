@@ -90,7 +90,7 @@ def extract_summary(content: str, tool_calls: list[object] | None = None) -> str
     if tool_calls:
         first_call = tool_calls[0]
         return truncate_summary(f"调用工具 {first_call.function.name}")
-    return "完成一轮响应"
+    return "模型空响应"
 
 
 def build_working_memory_prompt(session_memory: WorkingMemoryState) -> str:
