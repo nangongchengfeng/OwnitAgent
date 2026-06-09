@@ -1,0 +1,11 @@
+[project]
+name = "demo-agents"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "openai>=2.41.0",
+    "prompt-toolkit>=3.0.52",
+    "rich>=15.0.0",
+]
