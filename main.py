@@ -1,4 +1,4 @@
-"""MagicCode v1 - 从 .env 读取配置的终端 AI 助手。"""
+"""OwnitAgent v1 - 从 .env 读取配置的终端 AI 助手。"""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ LIST_FILES_MAX_DEPTH = 3
 SEARCH_RESULT_LIMIT = 50
 TOOL_CALL_LIMIT = 20
 BASE_SYSTEM_PROMPT = (
-    "You are MagicCode, a terminal AI coding assistant. "
+    "You are OwnitAgent, a terminal AI coding assistant. "
     "Be concise and helpful. Format responses in Markdown."
 )
 DEFAULT_MEMORY_MANAGEMENT_SOP = """# Memory Management SOP
@@ -724,7 +724,7 @@ def build_console() -> Console:
 
 def build_welcome_panel(settings: Settings) -> Panel:
     return Panel(
-        "[bold cyan]MagicCode v3[/] - 终端 AI 编程助手\n"
+        "[bold cyan]OwnitAgent v3[/] - 终端 AI 编程助手\n"
         f"当前模型: {settings.model}\n"
         "输入 'exit' 退出",
         border_style="cyan",
@@ -734,7 +734,7 @@ def build_welcome_panel(settings: Settings) -> Panel:
 def build_reply_panel(reply: str) -> Panel:
     return Panel(
         Markdown(_clean_content(reply, shrink_code_blocks=False)),
-        title="MagicCode",
+        title="OwnitAgent",
         border_style="blue",
     )
 

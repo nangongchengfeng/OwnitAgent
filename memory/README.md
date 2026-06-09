@@ -1,6 +1,6 @@
 # Memory 目录说明
 
-这个目录用于存放 `MagicCode` 的记忆内存。当前设计参考
+这个目录用于存放 `OwnitAgent` 的记忆内存。当前设计参考
 [`docs/context-management-design.md`](file:///d:/Code/Agents/demo_agents/docs/context-management-design.md)，
 采用 `L0-L4` 分层方式组织长期记忆和历史归档。
 

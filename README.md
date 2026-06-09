@@ -1,4 +1,4 @@
-# MagicCode
+# OwnitAgent
 
 > 终端 AI 编程助手 — 从 `.env` 读取配置，支持多模型、流式输出与工具调用。
 
@@ -9,7 +9,7 @@
 
 ## 📖 简介
 
-MagicCode 是一个运行在终端中的 AI 编程助手，基于 OpenAI 兼容 API，支持**流式输出**和**工具调用**（Function Calling）。它可以：
+OwnitAgent 是一个运行在终端中的 AI 编程助手，基于 OpenAI 兼容 API，支持**流式输出**和**工具调用**（Function Calling）。它可以：
 
 - 📖 **读取文件** — 带行号展示源码
 - ✍️ **写入文件** — 自动创建父目录
@@ -48,7 +48,7 @@ MagicCode 是一个运行在终端中的 AI 编程助手，基于 OpenAI 兼容 
 ```bash
 # 克隆项目
 git clone <your-repo-url>
-cd demo_agents
+cd <repo-dir>
 
 # 使用 uv 安装依赖
 uv sync
@@ -86,7 +86,7 @@ python main.py
 ## 📂 项目结构
 
 ```
-demo_agents/
+OwnitAgent/
 ├── .env                 # 环境变量配置（不纳入版本控制）
 ├── .gitignore           # Git 忽略规则
 ├── .python-version      # Python 版本声明

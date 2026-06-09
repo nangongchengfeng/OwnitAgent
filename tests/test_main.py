@@ -121,7 +121,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(len(live.updates), 2)
         panel = live.updates[-1]
         self.assertIsInstance(panel, Panel)
-        self.assertEqual(panel.title, "MagicCode")
+        self.assertEqual(panel.title, "OwnitAgent")
         self.assertEqual(str(panel.border_style), "blue")
         self.assertIsInstance(panel.renderable, Markdown)
         self.assertEqual(panel.renderable.markup, "你好")
@@ -137,7 +137,7 @@ class MainTests(unittest.TestCase):
 
         self.assertIsInstance(panel, Panel)
         self.assertEqual(str(panel.border_style), "cyan")
-        self.assertIn("MagicCode", panel.renderable)
+        self.assertIn("OwnitAgent", panel.renderable)
         self.assertIn(settings.model, panel.renderable)
 
     def test_build_system_prompt_includes_project_context(self) -> None:
