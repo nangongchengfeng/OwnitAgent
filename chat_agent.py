@@ -272,6 +272,8 @@ def chat(
             used_non_stream_fallback = True
             tool_calls, parsed_tool_calls, parse_ok = _parse_tool_calls(message, console)
             if not parse_ok:
+                record_working_memory(session_memory, message.content or "", tool_calls)
+                history.append(serialize_assistant_message(message))
                 return message.content or ""
             if _has_message_content(message) and not content_rendered:
                 console.print(build_reply_panel(message.content))
@@ -290,6 +292,8 @@ def chat(
             used_non_stream_fallback = True
             tool_calls, parsed_tool_calls, parse_ok = _parse_tool_calls(message, console)
             if not parse_ok:
+                record_working_memory(session_memory, message.content or "", tool_calls)
+                history.append(serialize_assistant_message(message))
                 return message.content or ""
             if _has_message_content(message) and not content_rendered:
                 console.print(build_reply_panel(message.content))
@@ -316,12 +320,25 @@ def chat(
             tool_count += 1
             tool_name = tool_call.function.name
             console.print(build_tool_start_message(tool_count, tool_name, tool_args))
-            result = execute_tool_fn(
-                tool_name,
-                tool_args,
-                workspace_root=WORKSPACE_ROOT,
-                session_memory=session_memory,
-            )
+            try:
+                result = execute_tool_fn(
+                    tool_name,
+                    tool_args,
+                    workspace_root=WORKSPACE_ROOT,
+                    session_memory=session_memory,
+                )
+            except Exception as exc:
+                console.print(f"[red]工具执行异常: {type(exc).__name__}: {exc}[/]")
+                result_text = f"Error: tool execution failed - {type(exc).__name__}: {exc}"
+                history.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_name,
+                        "content": result_text,
+                    }
+                )
+                continue
             outcome = normalize_tool_outcome(result)
             result_text = serialize_tool_data(outcome.data)
             console.print(build_tool_result_message(result_text))

@@ -168,6 +168,34 @@ TOOLS = [
 ]
 
 
+# 检测命令是否包含危险操作（支持 Linux 和 Windows）
+def _is_dangerous_command(command: str) -> bool:
+    lowered = command.lower().strip()
+    dangerous_patterns = [
+        # Linux 危险命令
+        "rm -rf /",
+        "rm -r -f /",
+        "rm --recursive --force /",
+        "rm -rf /*",
+        "mkfs",
+        "dd if=",
+        "> /dev/sd",
+        # Windows 危险命令
+        "format c:",
+        "format d:",
+        "del /f /s c:\\",
+        "del /f /s d:\\",
+        "remove-item -recurse -force c:\\",
+        "remove-item -recurse -force d:\\",
+        "rmdir /s /q c:\\",
+        "rmdir /s /q d:\\",
+        "diskpart",
+    ]
+    # 压缩多余空格后匹配
+    compact = " ".join(lowered.split())
+    return any(pattern in compact for pattern in dangerous_patterns)
+
+
 # 将工具执行结果统一规范化为 StepOutcome 类型
 # 如果结果已经是 StepOutcome 实例则直接返回，否则将其包装为 data 字段
 def normalize_tool_outcome(result: Any) -> StepOutcome:
@@ -272,6 +300,8 @@ def execute_tool(
         if name == "read_memory":
             ensure_memory_scaffold(workspace_root)
             path = resolve_memory_path(params["path"], workspace_root)
+            if not path.exists():
+                return f"Error: memory file not found: {params['path']}"
             content = path.read_text(encoding="utf-8", errors="replace")
             lines = content.split("\n")
             numbered = "\n".join(
@@ -320,9 +350,7 @@ def execute_tool(
         # run_command: 执行 Shell 命令（含危险命令拦截和 30s 超时）
         if name == "run_command":
             command = params["command"]
-            # 危险命令黑名单
-            dangerous = ["rm -rf /", "mkfs", "dd if=", "> /dev/sd"]
-            if any(item in command for item in dangerous):
+            if _is_dangerous_command(command):
                 return "Refused to execute dangerous command"
 
             result = subprocess.run(

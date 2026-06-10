@@ -353,6 +353,19 @@ class MainTests(unittest.TestCase):
 
         self.assertIn("Error: volatile content", result)
 
+    def test_read_memory_handles_missing_file_gracefully(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+            main.ensure_memory_scaffold(workspace_root)
+
+            result = main.execute_tool(
+                "read_memory",
+                {"path": "nonexistent_memory.txt"},
+                workspace_root=workspace_root,
+            )
+
+        self.assertIn("Error", result)
+
     def test_general_file_tools_reject_memory_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace_root = Path(temp_dir)
@@ -415,6 +428,36 @@ class MainTests(unittest.TestCase):
         )
 
         self.assertEqual(result, "Refused to execute dangerous command")
+
+    def test_execute_tool_refuses_dangerous_command_bypass_attempts(self) -> None:
+        bypass_attempts = [
+            "rm  -rf  /",
+            "rm -r -f /",
+            "rm --recursive --force /",
+            "rm -rf /*",
+            "rm -rf /home/../..",
+            "rm -rf /etc /var",
+            "mkfs.ext4 /dev/sda1",
+            "dd if=/dev/zero of=/dev/sda",
+            "> /dev/sda",
+            "format C:",
+            "del /f /s C:\\",
+            "Remove-Item -Recurse -Force C:\\",
+            "rmdir /s /q C:\\",
+            "diskpart",
+        ]
+        for cmd in bypass_attempts:
+            with self.subTest(command=cmd):
+                result = main.execute_tool(
+                    "run_command",
+                    {"command": cmd},
+                    workspace_root=Path.cwd(),
+                )
+                self.assertEqual(
+                    result,
+                    "Refused to execute dangerous command",
+                    f"命令 '{cmd}' 未被拦截",
+                )
 
     def test_chat_runs_react_tool_loop_and_returns_final_reply(self) -> None:
         settings = main.Settings(
@@ -985,6 +1028,80 @@ class MainTests(unittest.TestCase):
         self.assertIn("<history>", prompt)
         self.assertIn("关键进展", prompt)
         self.assertIn("memory/task_sops/demo.md", prompt)
+
+
+
+    def test_chat_handles_tool_execution_exception_gracefully(self) -> None:
+        settings = main.Settings(
+            api_key="sk-xx",
+            model="deepseek-ai/DeepSeek-V4-Flash",
+            base_url="https://api.siliconflow.cn/v1",
+        )
+        history = [{"role": "system", "content": "system"}]
+        streamed_chunks = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id="call_err",
+                                    function=SimpleNamespace(
+                                        name="read_file",
+                                        arguments='{"path":"nonexistent.txt"}',
+                                    ),
+                                )
+                            ],
+                        )
+                    )
+                ]
+            ),
+        ]
+
+        class FakeCompletions:
+            def __init__(self, chunks):
+                self.chunks = chunks
+                self.calls = []
+
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                return self.chunks
+
+        class FakeLive:
+            def __init__(self, **kwargs):
+                self.updates = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def update(self, renderable):
+                self.updates.append(renderable)
+
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=FakeCompletions(streamed_chunks))
+        )
+        console = Console(record=True, width=80)
+
+        def failing_execute(name, params, **kwargs):
+            raise RuntimeError("simulated tool crash")
+
+        reply = main.chat(
+            "test exception",
+            fake_client,
+            settings,
+            history,
+            console,
+            execute_tool_fn=failing_execute,
+        )
+
+        self.assertEqual(reply, "")
+        console_text = console.export_text()
+        self.assertIn("工具执行异常", console_text)
 
 
 if __name__ == "__main__":
