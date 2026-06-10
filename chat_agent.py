@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+import time
 
 from openai import OpenAI
 from rich.console import Console
@@ -27,6 +28,7 @@ from ui import (
 
 EMPTY_RESPONSE_MESSAGE = "模型未返回内容，也未发起工具调用，请重试或检查模型/网关兼容性。"
 
+MAX_TURN_LIMIT = 50
 
 def record_token_usage(stats: TokenUsageStats, response: object) -> None:
     usage = getattr(response, "usage", None)
@@ -198,6 +200,7 @@ def _request_chat_message(
     live_factory=Live,
     token_stats: TokenUsageStats | None = None,
     stream: bool = True,
+    max_retries: int = 3,
 ) -> tuple[object, bool]:
     request_kwargs: dict[str, object] = {
         "model": settings.model,
@@ -207,7 +210,21 @@ def _request_chat_message(
     if stream:
         request_kwargs["stream"] = True
         request_kwargs["stream_options"] = {"include_usage": True}
-    response = client.chat.completions.create(**request_kwargs)
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(**request_kwargs)
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if "stream_options" in error_msg and "stream_options" in request_kwargs:
+                del request_kwargs["stream_options"]
+                attempt -= 1
+                continue
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+        else:
+            break
     if stream:
         return _stream_response_to_message(
             response,
@@ -218,7 +235,6 @@ def _request_chat_message(
     if token_stats is not None:
         record_token_usage(token_stats, response)
     return response.choices[0].message, False
-
 
 def chat(
     user_input: str,
@@ -235,7 +251,7 @@ def chat(
     history.append({"role": "user", "content": user_input})
     tool_count = 0
 
-    while True:
+    while session_memory.current_turn < MAX_TURN_LIMIT:
         session_memory.current_turn += 1
         runtime_messages = build_runtime_messages(
             history,
@@ -353,6 +369,10 @@ def chat(
                 }
             )
 
+
+    if session_memory.current_turn >= MAX_TURN_LIMIT:
+        console.print(f"[red]Max turn limit reached ({MAX_TURN_LIMIT})[/]")
+        return ""
 
 def run_chat(console: Console | None = None, live_factory=Live) -> None:
     load_env_file()

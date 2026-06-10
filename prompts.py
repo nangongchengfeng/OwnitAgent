@@ -60,10 +60,8 @@ def build_memory_context(workspace_root: Path = WORKSPACE_ROOT) -> str:
 
 def build_system_prompt(workspace_root: Path = WORKSPACE_ROOT) -> str:
     """组装完整的系统提示词：基础提示词 + 项目上下文 + 记忆上下文。"""
-    # 确保记忆目录骨架存在
-    ensure_memory_scaffold(workspace_root)
-    parts = [BASE_SYSTEM_PROMPT]
 
+    parts = [BASE_SYSTEM_PROMPT]
     # 加载项目上下文（README 等文档）
     project_context = load_project_context(workspace_root)
     if project_context:

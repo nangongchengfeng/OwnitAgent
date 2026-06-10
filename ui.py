@@ -78,7 +78,7 @@ def _compact_tool_args(name: str, args: dict) -> str:
 def build_welcome_panel(settings: Settings) -> Panel:
     """构建启动欢迎面板，显示 Agent 名称、当前模型和退出提示"""
     return Panel(
-        "[bold cyan]OwnitAgent v3[/] - 终端 AI 编程助手\n"
+        "[bold cyan]OwnitAgent v0.1.0[/] - 终端 AI 编程助手\n"
         f"当前模型: {settings.model}\n"
         "输入 'exit' 退出",
         border_style="cyan",

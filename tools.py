@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 
 from config import (
     IGNORED_PATH_NAMES,
@@ -198,6 +198,18 @@ def _is_dangerous_command(command: str) -> bool:
 
 # 将工具执行结果统一规范化为 StepOutcome 类型
 # 如果结果已经是 StepOutcome 实例则直接返回，否则将其包装为 data 字段
+def _walk_files(search_path: Path, workspace_root: Path) -> Generator[tuple[Path, int, str], None, None]:
+    for current_root, dir_names, file_names in os.walk(search_path):
+        dir_names[:] = [d for d in dir_names if d not in IGNORED_PATH_NAMES]
+        for file_name in sorted(file_names):
+            file_path = Path(current_root) / file_name
+            try:
+                with file_path.open("r", encoding="utf-8", errors="replace") as f:
+                    for index, line in enumerate(f, start=1):
+                        yield file_path, index, line
+            except OSError:
+                continue
+
 def normalize_tool_outcome(result: Any) -> StepOutcome:
     if isinstance(result, StepOutcome):
         return result
@@ -322,14 +334,23 @@ def execute_tool(
             append = bool(params.get("append", False))
 
             # L1 洞察文件必须保持在 30 行以内
-            if path.name == MEMORY_L1_FILE and not append and len(content.splitlines()) > 30:
-                return "Error: L1 insight must stay within 30 lines"
+            if path.name == MEMORY_L1_FILE:
+                if append and path.exists():
+                    existing = path.read_text(encoding="utf-8", errors="replace")
+                    total_lines = len(existing.splitlines()) + len(content.splitlines())
+                    if total_lines > 30:
+                        return "Error: L1 insight must stay within 30 lines"
+                elif not append and len(content.splitlines()) > 30:
+                    return "Error: L1 insight must stay within 30 lines"
 
             # 追加模式：在现有内容后拼接新内容
-            if append and path.exists() and path.read_text(encoding="utf-8", errors="replace"):
+            if append and path.exists():
                 existing = path.read_text(encoding="utf-8", errors="replace")
-                separator = "" if existing.endswith("\n") else "\n"
-                path.write_text(existing + separator + content, encoding="utf-8")
+                if existing:
+                    separator = "" if existing.endswith("\n") else "\n"
+                    path.write_text(existing + separator + content, encoding="utf-8")
+                else:
+                    path.write_text(content, encoding="utf-8")
             else:
                 path.write_text(content, encoding="utf-8")
             return f"Written memory to {path}"
@@ -391,33 +412,19 @@ def execute_tool(
             walk_directory(path)
             return "\n".join(result) or "Empty directory"
 
+
+# 遍历目录中的文件，过滤忽略目录，生成 (文件路径, 行号, 行内容) 元组
         # search_code: 在目录中搜索文本模式（大小写不敏感）
         if name == "search_code":
             pattern = params["pattern"].lower()
             path = resolve_workspace_path(params.get("path", "."), workspace_root)
             matches: list[str] = []
-
-            for current_root, dir_names, file_names in os.walk(path):
-                # 过滤掉需要忽略的目录名
-                dir_names[:] = [
-                    dir_name
-                    for dir_name in dir_names
-                    if dir_name not in IGNORED_PATH_NAMES
-                ]
-                for file_name in sorted(file_names):
-                    file_path = Path(current_root) / file_name
-                    try:
-                        with file_path.open("r", encoding="utf-8", errors="replace") as file:
-                            for index, line in enumerate(file, start=1):
-                                if pattern in line.lower():
-                                    relative_path = file_path.relative_to(workspace_root)
-                                    matches.append(f"{relative_path}:{index}: {line.rstrip()}")
-                                    # 达到结果上限后提前返回
-                                    if len(matches) >= SEARCH_RESULT_LIMIT:
-                                        return "\n".join(matches)
-                    except OSError:
-                        continue
-
+            for file_path, index, line in _walk_files(path, workspace_root):
+                if pattern in line.lower():
+                    relative_path = file_path.relative_to(workspace_root)
+                    matches.append(f"{relative_path}:{index}: {line.rstrip()}")
+                    if len(matches) >= SEARCH_RESULT_LIMIT:
+                        return "\n".join(matches)
             return "\n".join(matches) or f"No matches for '{params['pattern']}'"
 
         # grep_search: 在目录中搜索正则表达式模式
@@ -425,28 +432,12 @@ def execute_tool(
             regex = re.compile(params["pattern"])
             path = resolve_workspace_path(params.get("path", "."), workspace_root)
             matches: list[str] = []
-
-            for current_root, dir_names, file_names in os.walk(path):
-                # 过滤掉需要忽略的目录名
-                dir_names[:] = [
-                    dir_name
-                    for dir_name in dir_names
-                    if dir_name not in IGNORED_PATH_NAMES
-                ]
-                for file_name in sorted(file_names):
-                    file_path = Path(current_root) / file_name
-                    try:
-                        with file_path.open("r", encoding="utf-8", errors="replace") as file:
-                            for index, line in enumerate(file, start=1):
-                                if regex.search(line):
-                                    relative_path = file_path.relative_to(workspace_root)
-                                    matches.append(f"{relative_path}:{index}: {line.rstrip()}")
-                                    # 达到结果上限后提前返回
-                                    if len(matches) >= SEARCH_RESULT_LIMIT:
-                                        return "\n".join(matches)
-                    except OSError:
-                        continue
-
+            for file_path, index, line in _walk_files(path, workspace_root):
+                if regex.search(line):
+                    relative_path = file_path.relative_to(workspace_root)
+                    matches.append(f"{relative_path}:{index}: {line.rstrip()}")
+                    if len(matches) >= SEARCH_RESULT_LIMIT:
+                        return "\n".join(matches)
             return "\n".join(matches) or f"No matches for regex '{params['pattern']}'"
 
         # 未知工具

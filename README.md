@@ -60,7 +60,7 @@ cd <repo-dir>
 uv sync
 
 # 或使用 pip
-pip install -r requirements.txt
+pip install openai rich prompt-toolkit
 ```
 
 ### 配置

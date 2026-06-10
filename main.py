@@ -1,4 +1,4 @@
-"""OwnitAgent v1 - 从 .env 读取配置的终端 AI 助手。"""
+"""OwnitAgent v0.1.0 - 从 .env 读取配置的终端 AI 助手。"""
 
 from chat_agent import (
     build_token_summary,
