@@ -91,7 +91,7 @@ def read_text_if_exists(path: Path) -> str:
 
 def is_volatile_memory_content(content: str) -> bool:
     volatile_patterns = [
-        r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2})?\b",
+        r"\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\b",
         r"\bpid[:= ]\d+\b",
         r"\bsession[_ -]?id\b",
         r"\b当前时间\b",

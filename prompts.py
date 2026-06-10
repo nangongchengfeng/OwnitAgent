@@ -24,6 +24,8 @@ from models import WorkingMemoryState  # 工作记忆状态数据类
 from ui import _clean_content          # 清理内容中的特殊标记
 
 
+MAX_PROJECT_CONTEXT_SIZE = 8000
+
 def load_project_context(workspace_root: Path = WORKSPACE_ROOT) -> str:
     """加载项目上下文文档（CLAUDE.md、AGENTS.md、README.md），拼接为提示词片段。"""
     context_parts: list[str] = []
@@ -33,6 +35,8 @@ def load_project_context(workspace_root: Path = WORKSPACE_ROOT) -> str:
         if not path.exists():
             continue
         content = path.read_text(encoding="utf-8", errors="replace")
+        if len(content) > MAX_PROJECT_CONTEXT_SIZE:
+            content = content[:MAX_PROJECT_CONTEXT_SIZE] + "\n...(truncated)"
         context_parts.append(f"--- {name} ---\n{content}")
     return "\n\n".join(context_parts)
 
