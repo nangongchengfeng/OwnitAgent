@@ -1,0 +1,26 @@
+2026-06-10 16:02:53,425 [WARNING] ownit_agent:282 工具调用次数已达上限 (20)
+2026-06-10 16:03:25,648 [WARNING] ownit_agent:72 忽略非法工具调用: $TOOL_NAME
+2026-06-10 16:04:10,505 [WARNING] ownit_agent:72 忽略非法工具调用: $TOOL_NAME
+2026-06-10 16:04:13,970 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:13,974 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:13,980 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:13,985 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:13,988 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:13,998 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,003 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,008 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,014 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,022 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,025 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,032 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,036 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,041 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,045 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,051 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,055 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,058 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,067 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,076 [ERROR] ownit_agent:311 工具执行异常: RuntimeError: simulated tool crash
+2026-06-10 16:04:14,082 [WARNING] ownit_agent:297 工具调用次数已达上限 (20)
+2026-06-10 16:04:14,088 [WARNING] ownit_agent:344 模型返回空响应
+2026-06-10 16:04:14,151 [WARNING] ownit_agent:297 工具调用次数已达上限 (20)

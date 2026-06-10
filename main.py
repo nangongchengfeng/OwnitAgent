@@ -73,4 +73,26 @@ from ui import (
 
 
 if __name__ == "__main__":
+    import argparse
+    import logging
+    from logging_config import setup_logging
+
+    parser = argparse.ArgumentParser(description="OwnitAgent - 终端 AI 助手")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="启用详细日志（INFO 级别）",
+    )
+    parser.add_argument(
+        "-d", "--debug", action="store_true",
+        help="启用调试日志（DEBUG 级别，含文件日志）",
+    )
+    args = parser.parse_args()
+
+    if args.debug:
+        setup_logging(logging.DEBUG)
+    elif args.verbose:
+        setup_logging(logging.INFO)
+    else:
+        setup_logging(logging.WARNING)
+
     run_chat()

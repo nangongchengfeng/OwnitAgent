@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -22,9 +22,11 @@ from memory_manager import (
     resolve_memory_path,
     resolve_workspace_path,
 )
+from logging_config import get_logger
 from models import StepOutcome, WorkingMemoryState
 from prompts import build_working_memory_prompt
 
+logger = get_logger()
 
 # 构建一个符合 OpenAI Function Calling 规范的工具定义字典
 # name: 工具名称（函数名）
@@ -231,6 +233,224 @@ def serialize_tool_data(data: Any) -> str:
 # 执行指定的工具调用，返回执行结果
 # 根据工具名称 name 分发到对应的处理分支
 # 所有文件操作都会经过工作区路径解析和安全校验，确保不越权访问
+
+def _tool_read_file(params: dict, workspace_root: Path) -> str:
+    path = resolve_workspace_path(params["path"], workspace_root)
+    rejected = reject_memory_file_tool(path, workspace_root)
+    if rejected:
+        return rejected
+    content = path.read_text(encoding="utf-8", errors="replace")
+    lines = content.split("\n")
+    numbered = "\n".join(
+        f"{index + 1:4d} | {line}" for index, line in enumerate(lines)
+    )
+    return f"{path} ({len(lines)} lines)\n{numbered}"
+
+
+def _tool_write_file(params: dict, workspace_root: Path) -> str:
+    path = resolve_workspace_path(params["path"], workspace_root)
+    rejected = reject_memory_file_tool(path, workspace_root)
+    if rejected:
+        return rejected
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = params["content"]
+    path.write_text(content, encoding="utf-8")
+    return f"Written to {path}"
+
+
+def _tool_edit_file(params: dict, workspace_root: Path) -> str:
+    path = resolve_workspace_path(params["path"], workspace_root)
+    rejected = reject_memory_file_tool(path, workspace_root)
+    if rejected:
+        return rejected
+    old_text = params["old_text"]
+    new_text = params["new_text"]
+    original = path.read_text(encoding="utf-8", errors="replace")
+    if old_text not in original:
+        return "Error: old_text not found in file"
+    updated = original.replace(old_text, new_text, 1)
+    path.write_text(updated, encoding="utf-8")
+    return f"Edited {path}"
+
+
+def _tool_delete_file(params: dict, workspace_root: Path) -> str:
+    path = resolve_workspace_path(params["path"], workspace_root)
+    rejected = reject_memory_file_tool(path, workspace_root)
+    if rejected:
+        return rejected
+    if not path.exists():
+        return f"Error: Path not found: {path}"
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    return f"Deleted {path}"
+
+
+def _tool_rename_file(params: dict, workspace_root: Path) -> str:
+    old_path = resolve_workspace_path(params["old_path"], workspace_root)
+    new_path = resolve_workspace_path(params["new_path"], workspace_root)
+    rejected = reject_memory_file_tool(old_path, workspace_root)
+    if rejected:
+        return rejected
+    rejected = reject_memory_file_tool(new_path, workspace_root)
+    if rejected:
+        return rejected
+    if not old_path.exists():
+        return f"Error: Path not found: {old_path}"
+    if new_path.exists():
+        return f"Error: Target already exists: {new_path}"
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    old_path.rename(new_path)
+    return f"Renamed {old_path} -> {new_path}"
+
+
+def _tool_read_memory(params: dict, workspace_root: Path) -> str:
+    ensure_memory_scaffold(workspace_root)
+    path = resolve_memory_path(params["path"], workspace_root)
+    if not path.exists():
+        return f"Error: memory file not found: {params['path']}"
+    content = path.read_text(encoding="utf-8", errors="replace")
+    lines = content.split("\n")
+    numbered = "\n".join(
+        f"{index + 1:4d} | {line}" for index, line in enumerate(lines)
+    )
+    return f"{path} ({len(lines)} lines)\n{numbered}"
+
+
+def _tool_write_memory(params: dict, workspace_root: Path) -> str:
+    ensure_memory_scaffold(workspace_root)
+    content = params["content"]
+    if is_volatile_memory_content(content):
+        return "Error: volatile content is not allowed in memory"
+
+    path = resolve_memory_path(params["path"], workspace_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    append = bool(params.get("append", False))
+
+    if path.name == MEMORY_L1_FILE:
+        if append and path.exists():
+            existing = path.read_text(encoding="utf-8", errors="replace")
+            total_lines = len(existing.splitlines()) + len(content.splitlines())
+            if total_lines > 30:
+                return "Error: L1 insight must stay within 30 lines"
+        elif not append and len(content.splitlines()) > 30:
+            return "Error: L1 insight must stay within 30 lines"
+
+    if append and path.exists():
+        existing = path.read_text(encoding="utf-8", errors="replace")
+        if existing:
+            separator = "" if existing.endswith("\n") else "\n"
+            path.write_text(existing + separator + content, encoding="utf-8")
+        else:
+            path.write_text(content, encoding="utf-8")
+    else:
+        path.write_text(content, encoding="utf-8")
+    return f"Written memory to {path}"
+
+
+def _tool_update_working_checkpoint(
+    params: dict, session_memory: WorkingMemoryState | None,
+) -> Any:
+    if session_memory is None:
+        return "Error: missing session memory"
+    if "key_info" in params:
+        session_memory.key_info = str(params.get("key_info", "")).strip()
+    if "related_sop" in params:
+        session_memory.related_sop = str(params.get("related_sop", "")).strip()
+    return StepOutcome(
+        data={"result": "working checkpoint updated"},
+        next_prompt=build_working_memory_prompt(session_memory),
+    )
+
+
+def _tool_run_command(params: dict, workspace_root: Path) -> str:
+    command = params["command"]
+    if _is_dangerous_command(command):
+        return "Refused to execute dangerous command"
+
+    result = subprocess.run(
+        command,
+        shell=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=str(workspace_root),
+    )
+    output = result.stdout
+    if result.stderr:
+        output += "\n--- stderr ---\n" + result.stderr
+    return output.strip() or "(Command completed with no output)"
+
+
+def _walk_directory(
+    current_path: Path, prefix: str = "", depth: int = 0,
+) -> list[str]:
+    result: list[str] = []
+    if depth >= LIST_FILES_MAX_DEPTH:
+        return result
+
+    entries = sorted(
+        entry for entry in current_path.iterdir()
+        if entry.name not in IGNORED_PATH_NAMES
+    )
+    for entry in entries:
+        if entry.is_dir():
+            result.append(f"{prefix}[dir] {entry.name}/")
+            result.extend(
+                _walk_directory(entry, prefix + "  ", depth + 1)
+            )
+        else:
+            result.append(f"{prefix}[file] {entry.name}")
+    return result
+
+
+def _tool_list_files(params: dict, workspace_root: Path) -> str:
+    path = resolve_workspace_path(params.get("path", "."), workspace_root)
+    result = _walk_directory(path)
+    return "\n".join(result) or "Empty directory"
+
+
+def _tool_search_code(params: dict, workspace_root: Path) -> str:
+    pattern = params["pattern"].lower()
+    path = resolve_workspace_path(params.get("path", "."), workspace_root)
+    matches: list[str] = []
+    for file_path, index, line in _walk_files(path, workspace_root):
+        if pattern in line.lower():
+            relative_path = file_path.relative_to(workspace_root)
+            matches.append(f"{relative_path}:{index}: {line.rstrip()}")
+            if len(matches) >= SEARCH_RESULT_LIMIT:
+                return "\n".join(matches)
+    return "\n".join(matches) or f"No matches for '{params['pattern']}'"
+
+
+def _tool_grep_search(params: dict, workspace_root: Path) -> str:
+    regex = re.compile(params["pattern"])
+    path = resolve_workspace_path(params.get("path", "."), workspace_root)
+    matches: list[str] = []
+    for file_path, index, line in _walk_files(path, workspace_root):
+        if regex.search(line):
+            relative_path = file_path.relative_to(workspace_root)
+            matches.append(f"{relative_path}:{index}: {line.rstrip()}")
+            if len(matches) >= SEARCH_RESULT_LIMIT:
+                return "\n".join(matches)
+    return "\n".join(matches) or f"No matches for regex '{params['pattern']}'"
+
+
+_TOOL_DISPATCH: dict[str, Any] = {
+    "read_file": _tool_read_file,
+    "write_file": _tool_write_file,
+    "edit_file": _tool_edit_file,
+    "delete_file": _tool_delete_file,
+    "rename_file": _tool_rename_file,
+    "read_memory": _tool_read_memory,
+    "write_memory": _tool_write_memory,
+    "list_files": _tool_list_files,
+    "search_code": _tool_search_code,
+    "grep_search": _tool_grep_search,
+}
+
+
 def execute_tool(
     name: str,
     params: dict,
@@ -238,209 +458,17 @@ def execute_tool(
     session_memory: WorkingMemoryState | None = None,
 ) -> Any:
     try:
-        # read_file: 读取文件内容并附加行号
-        if name == "read_file":
-            path = resolve_workspace_path(params["path"], workspace_root)
-            rejected = reject_memory_file_tool(path, workspace_root)
-            if rejected:
-                return rejected
-            content = path.read_text(encoding="utf-8", errors="replace")
-            lines = content.split("\n")
-            numbered = "\n".join(
-                f"{index + 1:4d} | {line}" for index, line in enumerate(lines)
-            )
-            return f"{path} ({len(lines)} lines)\n{numbered}"
-
-        # write_file: 写入文件，自动创建父目录
-        if name == "write_file":
-            path = resolve_workspace_path(params["path"], workspace_root)
-            rejected = reject_memory_file_tool(path, workspace_root)
-            if rejected:
-                return rejected
-            path.parent.mkdir(parents=True, exist_ok=True)
-            content = params["content"]
-            path.write_text(content, encoding="utf-8")
-            return f"Written to {path} ({len(content)} chars)"
-
-        # edit_file: 在文件中查找并替换文本（仅首次匹配）
-        if name == "edit_file":
-            path = resolve_workspace_path(params["path"], workspace_root)
-            rejected = reject_memory_file_tool(path, workspace_root)
-            if rejected:
-                return rejected
-            content = path.read_text(encoding="utf-8", errors="replace")
-            old_text = params["old_text"]
-            if old_text not in content:
-                return "Error: Target text not found in file"
-            new_content = content.replace(old_text, params["new_text"], 1)
-            path.write_text(new_content, encoding="utf-8")
-            return f"Edited {path}"
-
-        # delete_file: 删除文件或递归删除目录
-        if name == "delete_file":
-            path = resolve_workspace_path(params["path"], workspace_root)
-            rejected = reject_memory_file_tool(path, workspace_root)
-            if rejected:
-                return rejected
-            if not path.exists():
-                return f"Error: Path not found: {path}"
-            if path.is_dir():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
-            return f"Deleted {path}"
-
-        # rename_file: 重命名或移动文件/目录
-        if name == "rename_file":
-            old_path = resolve_workspace_path(params["old_path"], workspace_root)
-            new_path = resolve_workspace_path(params["new_path"], workspace_root)
-            rejected = reject_memory_file_tool(old_path, workspace_root)
-            if rejected:
-                return rejected
-            rejected = reject_memory_file_tool(new_path, workspace_root)
-            if rejected:
-                return rejected
-            if not old_path.exists():
-                return f"Error: Path not found: {old_path}"
-            if new_path.exists():
-                return f"Error: Target already exists: {new_path}"
-            new_path.parent.mkdir(parents=True, exist_ok=True)
-            old_path.rename(new_path)
-            return f"Renamed {old_path} -> {new_path}"
-
-        # read_memory: 读取记忆文件并附加行号
-        if name == "read_memory":
-            ensure_memory_scaffold(workspace_root)
-            path = resolve_memory_path(params["path"], workspace_root)
-            if not path.exists():
-                return f"Error: memory file not found: {params['path']}"
-            content = path.read_text(encoding="utf-8", errors="replace")
-            lines = content.split("\n")
-            numbered = "\n".join(
-                f"{index + 1:4d} | {line}" for index, line in enumerate(lines)
-            )
-            return f"{path} ({len(lines)} lines)\n{numbered}"
-
-        # write_memory: 写入记忆文件，含易变内容检测和 L1 行数限制
-        if name == "write_memory":
-            ensure_memory_scaffold(workspace_root)
-            content = params["content"]
-            # 拒绝写入易变内容（如临时 ID、时间戳等）
-            if is_volatile_memory_content(content):
-                return "Error: volatile content is not allowed in memory"
-
-            path = resolve_memory_path(params["path"], workspace_root)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            append = bool(params.get("append", False))
-
-            # L1 洞察文件必须保持在 30 行以内
-            if path.name == MEMORY_L1_FILE:
-                if append and path.exists():
-                    existing = path.read_text(encoding="utf-8", errors="replace")
-                    total_lines = len(existing.splitlines()) + len(content.splitlines())
-                    if total_lines > 30:
-                        return "Error: L1 insight must stay within 30 lines"
-                elif not append and len(content.splitlines()) > 30:
-                    return "Error: L1 insight must stay within 30 lines"
-
-            # 追加模式：在现有内容后拼接新内容
-            if append and path.exists():
-                existing = path.read_text(encoding="utf-8", errors="replace")
-                if existing:
-                    separator = "" if existing.endswith("\n") else "\n"
-                    path.write_text(existing + separator + content, encoding="utf-8")
-                else:
-                    path.write_text(content, encoding="utf-8")
-            else:
-                path.write_text(content, encoding="utf-8")
-            return f"Written memory to {path}"
-
-        # update_working_checkpoint: 更新会话工作记忆检查点
+        logger.debug("执行工具: %s params=%s", name, params)
         if name == "update_working_checkpoint":
-            if session_memory is None:
-                return "Error: missing session memory"
-            if "key_info" in params:
-                session_memory.key_info = str(params.get("key_info", "")).strip()
-            if "related_sop" in params:
-                session_memory.related_sop = str(params.get("related_sop", "")).strip()
-            return StepOutcome(
-                data={"result": "working checkpoint updated"},
-                next_prompt=build_working_memory_prompt(session_memory),
-            )
-
-        # run_command: 执行 Shell 命令（含危险命令拦截和 30s 超时）
+            return _tool_update_working_checkpoint(params, session_memory)
         if name == "run_command":
-            command = params["command"]
-            if _is_dangerous_command(command):
-                return "Refused to execute dangerous command"
+            return _tool_run_command(params, workspace_root)
 
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=str(workspace_root),
-            )
-            output = result.stdout
-            if result.stderr:
-                output += "\n--- stderr ---\n" + result.stderr
-            return output.strip() or "(Command completed with no output)"
-
-        # list_files: 递归列出目录内容（最多 3 层，忽略 .git 等目录）
-        if name == "list_files":
-            path = resolve_workspace_path(params.get("path", "."), workspace_root)
-            result: list[str] = []
-
-            # 递归遍历目录，收集文件和子目录信息
-            def walk_directory(current_path: Path, prefix: str = "", depth: int = 0) -> None:
-                if depth >= LIST_FILES_MAX_DEPTH:
-                    return
-
-                entries = sorted(
-                    entry
-                    for entry in current_path.iterdir()
-                    if entry.name not in IGNORED_PATH_NAMES
-                )
-                for entry in entries:
-                    if entry.is_dir():
-                        result.append(f"{prefix}[dir] {entry.name}/")
-                        walk_directory(entry, prefix + "  ", depth + 1)
-                    else:
-                        result.append(f"{prefix}[file] {entry.name}")
-
-            walk_directory(path)
-            return "\n".join(result) or "Empty directory"
-
-
-# 遍历目录中的文件，过滤忽略目录，生成 (文件路径, 行号, 行内容) 元组
-        # search_code: 在目录中搜索文本模式（大小写不敏感）
-        if name == "search_code":
-            pattern = params["pattern"].lower()
-            path = resolve_workspace_path(params.get("path", "."), workspace_root)
-            matches: list[str] = []
-            for file_path, index, line in _walk_files(path, workspace_root):
-                if pattern in line.lower():
-                    relative_path = file_path.relative_to(workspace_root)
-                    matches.append(f"{relative_path}:{index}: {line.rstrip()}")
-                    if len(matches) >= SEARCH_RESULT_LIMIT:
-                        return "\n".join(matches)
-            return "\n".join(matches) or f"No matches for '{params['pattern']}'"
-
-        # grep_search: 在目录中搜索正则表达式模式
-        if name == "grep_search":
-            regex = re.compile(params["pattern"])
-            path = resolve_workspace_path(params.get("path", "."), workspace_root)
-            matches: list[str] = []
-            for file_path, index, line in _walk_files(path, workspace_root):
-                if regex.search(line):
-                    relative_path = file_path.relative_to(workspace_root)
-                    matches.append(f"{relative_path}:{index}: {line.rstrip()}")
-                    if len(matches) >= SEARCH_RESULT_LIMIT:
-                        return "\n".join(matches)
-            return "\n".join(matches) or f"No matches for regex '{params['pattern']}'"
-
-        # 未知工具
+        handler = _TOOL_DISPATCH.get(name)
+        if handler is not None:
+            return handler(params, workspace_root)
+        logger.warning("未知工具: %s", name)
         return f"Error: unknown tool: {name}"
     except Exception as error:
+        logger.error("工具执行异常: %s: %s", type(error).__name__, error)
         return f"Error: {type(error).__name__}: {error}"

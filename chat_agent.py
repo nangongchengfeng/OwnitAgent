@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from types import SimpleNamespace
@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.live import Live
 
 from config import WORKSPACE_ROOT, TOOL_CALL_LIMIT, build_client, get_settings, load_env_file
+from logging_config import get_logger
 from memory_manager import ensure_memory_scaffold
 from models import Settings, TokenUsageStats, WorkingMemoryState
 from prompts import (
@@ -26,9 +27,19 @@ from ui import (
     build_welcome_panel,
 )
 
+logger = get_logger()
+
 EMPTY_RESPONSE_MESSAGE = "模型未返回内容，也未发起工具调用，请重试或检查模型/网关兼容性。"
 
 MAX_TURN_LIMIT = 50
+
+
+def _get_registered_tool_names() -> set[str]:
+    return {
+        tool["function"]["name"]
+        for tool in TOOLS
+        if tool.get("type") == "function" and "function" in tool
+    }
 
 def record_token_usage(stats: TokenUsageStats, response: object) -> None:
     usage = getattr(response, "usage", None)
@@ -52,19 +63,26 @@ def _parse_tool_calls(
     report_errors: bool = True,
 ) -> tuple[list[object], list[tuple[object, dict]], bool]:
     tool_calls = getattr(message, "tool_calls", None) or []
+    valid_tool_calls: list[object] = []
     parsed_tool_calls: list[tuple[object, dict]] = []
+    registered_tool_names = _get_registered_tool_names()
     for tool_call in tool_calls:
+        tool_name = getattr(tool_call.function, "name", "") or ""
+        if tool_name not in registered_tool_names:
+            logger.warning("忽略非法工具调用: %s", tool_name or "<empty>")
+            continue
         try:
             tool_args = json.loads(tool_call.function.arguments or "{}")
         except json.JSONDecodeError as error:
             if report_errors:
                 console.print(
                     "[red]工具参数解析失败[/] "
-                    f"[dim]{tool_call.function.name}: {error.msg} (pos {error.pos})[/]"
+                    f"[dim]{tool_name}: {error.msg} (pos {error.pos})[/]"
                 )
-            return tool_calls, [], False
+            return valid_tool_calls, [], False
+        valid_tool_calls.append(tool_call)
         parsed_tool_calls.append((tool_call, tool_args))
-    return tool_calls, parsed_tool_calls, True
+    return valid_tool_calls, parsed_tool_calls, True
 
 
 def _stream_response_to_message(
@@ -236,6 +254,104 @@ def _request_chat_message(
         record_token_usage(token_stats, response)
     return response.choices[0].message, False
 
+
+def _fallback_non_stream(
+    client: OpenAI,
+    settings: Settings,
+    runtime_messages: list[dict[str, str]],
+    console: Console,
+    live_factory,
+    token_stats: TokenUsageStats | None,
+    message: object,
+    session_memory: WorkingMemoryState,
+    history: list[dict[str, str]],
+    content_rendered: bool,
+) -> tuple[object, list[object], list[tuple[object, dict]], bool, bool]:
+    logger.info("非流式回退请求")
+    message, _ = _request_chat_message(
+        client, settings, runtime_messages, console,
+        live_factory=live_factory, token_stats=token_stats, stream=False,
+    )
+    tool_calls, parsed_tool_calls, parse_ok = _parse_tool_calls(message, console)
+    if not parse_ok:
+        logger.warning("非流式回退后工具参数仍解析失败")
+        record_working_memory(session_memory, message.content or "", tool_calls)
+        history.append(serialize_assistant_message(message))
+        return message, tool_calls, [], True, content_rendered
+    if _has_message_content(message) and not content_rendered:
+        console.print(build_reply_panel(message.content))
+        content_rendered = True
+    return message, tool_calls, parsed_tool_calls, False, content_rendered
+
+
+def _execute_tool_calls(
+    parsed_tool_calls: list[tuple[object, dict]],
+    tool_count: int,
+    history: list[dict[str, str]],
+    console: Console,
+    execute_tool_fn,
+    session_memory: WorkingMemoryState,
+) -> tuple[int, str | None]:
+    for tool_call, tool_args in parsed_tool_calls:
+        if tool_count >= TOOL_CALL_LIMIT:
+            logger.warning("工具调用次数已达上限 (%d)", TOOL_CALL_LIMIT)
+            console.print(f"[red]Tool call limit reached ({TOOL_CALL_LIMIT})[/]")
+            return tool_count, ""
+
+        tool_count += 1
+        tool_name = tool_call.function.name
+        logger.debug("执行工具 #%d: %s args=%s", tool_count, tool_name, tool_args)
+        console.print(build_tool_start_message(tool_count, tool_name, tool_args))
+        try:
+            result = execute_tool_fn(
+                tool_name, tool_args,
+                workspace_root=WORKSPACE_ROOT, session_memory=session_memory,
+            )
+        except Exception as exc:
+            logger.error("工具执行异常: %s: %s", type(exc).__name__, exc)
+            console.print(f"[red]工具执行异常: {type(exc).__name__}: {exc}[/]")
+            result_text = f"Error: tool execution failed - {type(exc).__name__}: {exc}"
+            history.append({
+                "role": "tool", "tool_call_id": tool_call.id,
+                "name": tool_name, "content": result_text,
+            })
+            continue
+        outcome = normalize_tool_outcome(result)
+        result_text = serialize_tool_data(outcome.data)
+        console.print(build_tool_result_message(result_text))
+        if outcome.should_exit:
+            return tool_count, result_text
+        history.append({
+            "role": "tool", "tool_call_id": tool_call.id,
+            "name": tool_name, "content": result_text,
+        })
+    return tool_count, None
+
+
+def _finalize_turn(
+    message: object,
+    tool_calls: list[object],
+    session_memory: WorkingMemoryState,
+    history: list[dict[str, str]],
+    console: Console,
+    content_rendered: bool,
+) -> str | None:
+    empty_response = not _has_message_content(message) and not tool_calls
+    record_working_memory(session_memory, message.content or "", tool_calls)
+    history.append(serialize_assistant_message(message))
+
+    if empty_response:
+        logger.warning("模型返回空响应")
+        console.print(f"[yellow]{EMPTY_RESPONSE_MESSAGE}[/]")
+        return ""
+
+    if not tool_calls:
+        if _has_message_content(message) and not content_rendered:
+            console.print(build_reply_panel(message.content))
+        return message.content or ""
+    return None
+
+
 def chat(
     user_input: str,
     client: OpenAI,
@@ -253,124 +369,64 @@ def chat(
 
     while session_memory.current_turn < MAX_TURN_LIMIT:
         session_memory.current_turn += 1
+        logger.info("第 %d 轮对话开始", session_memory.current_turn)
         runtime_messages = build_runtime_messages(
-            history,
-            session_memory,
-            workspace_root=WORKSPACE_ROOT,
+            history, session_memory, workspace_root=WORKSPACE_ROOT,
         )
         console.print(build_turn_message(session_memory.current_turn))
         message, content_rendered = _request_chat_message(
-            client,
-            settings,
-            runtime_messages,
-            console,
-            live_factory=live_factory,
-            token_stats=token_stats,
-            stream=True,
+            client, settings, runtime_messages, console,
+            live_factory=live_factory, token_stats=token_stats, stream=True,
         )
         tool_calls, parsed_tool_calls, parse_ok = _parse_tool_calls(
-            message,
-            console,
-            report_errors=False,
+            message, console, report_errors=False,
         )
         used_non_stream_fallback = False
 
         if not parse_ok:
-            message, _ = _request_chat_message(
-                client,
-                settings,
-                runtime_messages,
-                console,
-                live_factory=live_factory,
-                token_stats=token_stats,
-                stream=False,
+            message, tool_calls, parsed_tool_calls, should_return, content_rendered = (
+                _fallback_non_stream(
+                    client, settings, runtime_messages, console,
+                    live_factory, token_stats, message,
+                    session_memory, history, content_rendered,
+                )
             )
             used_non_stream_fallback = True
-            tool_calls, parsed_tool_calls, parse_ok = _parse_tool_calls(message, console)
-            if not parse_ok:
-                record_working_memory(session_memory, message.content or "", tool_calls)
-                history.append(serialize_assistant_message(message))
+            if should_return:
                 return message.content or ""
-            if _has_message_content(message) and not content_rendered:
-                console.print(build_reply_panel(message.content))
-                content_rendered = True
 
-        if not _has_message_content(message) and not tool_calls and not used_non_stream_fallback:
-            message, _ = _request_chat_message(
-                client,
-                settings,
-                runtime_messages,
-                console,
-                live_factory=live_factory,
-                token_stats=token_stats,
-                stream=False,
+        if (
+            not _has_message_content(message)
+            and not tool_calls
+            and not used_non_stream_fallback
+        ):
+            message, tool_calls, parsed_tool_calls, should_return, content_rendered = (
+                _fallback_non_stream(
+                    client, settings, runtime_messages, console,
+                    live_factory, token_stats, message,
+                    session_memory, history, content_rendered,
+                )
             )
             used_non_stream_fallback = True
-            tool_calls, parsed_tool_calls, parse_ok = _parse_tool_calls(message, console)
-            if not parse_ok:
-                record_working_memory(session_memory, message.content or "", tool_calls)
-                history.append(serialize_assistant_message(message))
+            if should_return:
                 return message.content or ""
-            if _has_message_content(message) and not content_rendered:
-                console.print(build_reply_panel(message.content))
-                content_rendered = True
 
-        empty_response = not _has_message_content(message) and not tool_calls
-        record_working_memory(session_memory, message.content or "", tool_calls)
-        history.append(serialize_assistant_message(message))
+        final_result = _finalize_turn(
+            message, tool_calls, session_memory, history, console, content_rendered,
+        )
+        if final_result is not None:
+            return final_result
 
-        if empty_response:
-            console.print(f"[yellow]{EMPTY_RESPONSE_MESSAGE}[/]")
-            return ""
-
-        if not tool_calls:
-            if _has_message_content(message) and not content_rendered:
-                console.print(build_reply_panel(message.content))
-            return message.content or ""
-
-        for tool_call, tool_args in parsed_tool_calls:
-            if tool_count >= TOOL_CALL_LIMIT:
-                console.print(f"[red]Tool call limit reached ({TOOL_CALL_LIMIT})[/]")
-                return ""
-
-            tool_count += 1
-            tool_name = tool_call.function.name
-            console.print(build_tool_start_message(tool_count, tool_name, tool_args))
-            try:
-                result = execute_tool_fn(
-                    tool_name,
-                    tool_args,
-                    workspace_root=WORKSPACE_ROOT,
-                    session_memory=session_memory,
-                )
-            except Exception as exc:
-                console.print(f"[red]工具执行异常: {type(exc).__name__}: {exc}[/]")
-                result_text = f"Error: tool execution failed - {type(exc).__name__}: {exc}"
-                history.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": tool_name,
-                        "content": result_text,
-                    }
-                )
-                continue
-            outcome = normalize_tool_outcome(result)
-            result_text = serialize_tool_data(outcome.data)
-            console.print(build_tool_result_message(result_text))
-            if outcome.should_exit:
-                return result_text
-            history.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": tool_name,
-                    "content": result_text,
-                }
-            )
+        tool_count, early_exit = _execute_tool_calls(
+            parsed_tool_calls, tool_count, history, console,
+            execute_tool_fn, session_memory,
+        )
+        if early_exit is not None:
+            return early_exit
 
 
     if session_memory.current_turn >= MAX_TURN_LIMIT:
+        logger.warning("对话轮次已达上限 (%d)", MAX_TURN_LIMIT)
         console.print(f"[red]Max turn limit reached ({MAX_TURN_LIMIT})[/]")
         return ""
 
