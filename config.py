@@ -30,7 +30,7 @@ IGNORED_PATH_NAMES = {
 }
 LIST_FILES_MAX_DEPTH = 3
 SEARCH_RESULT_LIMIT = 50
-TOOL_CALL_LIMIT = 20
+TOOL_CALL_LIMIT = 50
 BASE_SYSTEM_PROMPT = (
     "You are OwnitAgent, a terminal AI coding assistant. "
     "Be concise and helpful. Format responses in Markdown."
