@@ -111,7 +111,7 @@ class MainTests(unittest.TestCase):
             settings,
             history,
             console=fake_console,
-            live_factory=lambda **kwargs: live,
+            live_cls=lambda **kwargs: live,
         )
 
         self.assertEqual(reply, "你好")
@@ -598,7 +598,7 @@ class MainTests(unittest.TestCase):
             history,
             console,
             token_stats=token_stats,
-            live_factory=lambda **kwargs: live,
+            live_cls=lambda **kwargs: live,
         )
 
         self.assertEqual(reply, "直接回复")

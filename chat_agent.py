@@ -88,7 +88,7 @@ def _parse_tool_calls(
 def _stream_response_to_message(
     response: object,
     console: Console,
-    live_factory=Live,
+    live_cls=Live,
     token_stats: TokenUsageStats | None = None,
 ) -> tuple[object, bool]:
     if hasattr(response, "choices"):
@@ -100,7 +100,7 @@ def _stream_response_to_message(
     streamed_tool_calls: dict[int, dict[str, object]] = {}
     rendered = False
 
-    with live_factory(console=console, refresh_per_second=8) as live:
+    with live_cls(console=console, refresh_per_second=8) as live:
         for chunk in response:
             if token_stats is not None:
                 record_token_usage(token_stats, chunk)
@@ -192,7 +192,7 @@ def chat_once(
     settings: Settings,
     history: list[dict[str, str]],
     console: Console,
-    live_factory=Live,
+    live_cls=Live,
     token_stats: TokenUsageStats | None = None,
 ) -> str:
     response = client.chat.completions.create(
@@ -204,7 +204,7 @@ def chat_once(
     message, _ = _stream_response_to_message(
         response,
         console,
-        live_factory=live_factory,
+        live_cls=live_cls,
         token_stats=token_stats,
     )
     return message.content or ""
@@ -215,7 +215,7 @@ def _request_chat_message(
     settings: Settings,
     runtime_messages: list[dict[str, str]],
     console: Console,
-    live_factory=Live,
+    live_cls=Live,
     token_stats: TokenUsageStats | None = None,
     stream: bool = True,
     max_retries: int = 3,
@@ -246,7 +246,7 @@ def _request_chat_message(
         return _stream_response_to_message(
             response,
             console,
-            live_factory=live_factory,
+            live_cls=live_cls,
             token_stats=token_stats,
         )
     if token_stats is not None:
@@ -259,7 +259,7 @@ def _fallback_non_stream(
     settings: Settings,
     runtime_messages: list[dict[str, str]],
     console: Console,
-    live_factory,
+    live_cls,
     token_stats: TokenUsageStats | None,
     message: object,
     session_memory: WorkingMemoryState,
@@ -269,7 +269,7 @@ def _fallback_non_stream(
     logger.info("非流式回退请求")
     message, _ = _request_chat_message(
         client, settings, runtime_messages, console,
-        live_factory=live_factory, token_stats=token_stats, stream=False,
+        live_cls=live_cls, token_stats=token_stats, stream=False,
     )
     tool_calls, parsed_tool_calls, parse_ok = _parse_tool_calls(message, console)
     if not parse_ok:
@@ -360,7 +360,7 @@ def chat(
     execute_tool_fn=execute_tool,
     token_stats: TokenUsageStats | None = None,
     session_memory: WorkingMemoryState | None = None,
-    live_factory=Live,
+    live_cls=Live,
 ) -> str:
     session_memory = session_memory or WorkingMemoryState()
     history.append({"role": "user", "content": user_input})
@@ -375,7 +375,7 @@ def chat(
         console.print(build_turn_message(session_memory.current_turn))
         message, content_rendered = _request_chat_message(
             client, settings, runtime_messages, console,
-            live_factory=live_factory, token_stats=token_stats, stream=True,
+            live_cls=live_cls, token_stats=token_stats, stream=True,
         )
         tool_calls, parsed_tool_calls, parse_ok = _parse_tool_calls(
             message, console, report_errors=False,
@@ -386,7 +386,7 @@ def chat(
             message, tool_calls, parsed_tool_calls, should_return, content_rendered = (
                 _fallback_non_stream(
                     client, settings, runtime_messages, console,
-                    live_factory, token_stats, message,
+                    live_cls, token_stats, message,
                     session_memory, history, content_rendered,
                 )
             )
@@ -402,7 +402,7 @@ def chat(
             message, tool_calls, parsed_tool_calls, should_return, content_rendered = (
                 _fallback_non_stream(
                     client, settings, runtime_messages, console,
-                    live_factory, token_stats, message,
+                    live_cls, token_stats, message,
                     session_memory, history, content_rendered,
                 )
             )
@@ -426,7 +426,7 @@ def chat(
 
     return ""
 
-def run_chat(console: Console | None = None, live_factory=Live) -> None:
+def run_chat(console: Console | None = None, live_cls=Live) -> None:
     load_env_file()
     ensure_memory_scaffold(WORKSPACE_ROOT)
     settings = get_settings()

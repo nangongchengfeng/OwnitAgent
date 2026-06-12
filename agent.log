@@ -1072,3 +1072,56 @@
 2026-06-12 11:58:51,192 [WARNING] ownit_agent:428 对话轮次已达上限 (50)
 2026-06-12 11:58:51,837 [WARNING] ownit_agent:343 模型返回空响应
 2026-06-12 11:58:51,900 [WARNING] ownit_agent:296 工具调用次数已达上限 (50)
+2026-06-12 12:12:00,494 [WARNING] ownit_agent:72 忽略非法工具调用: $TOOL_NAME
+2026-06-12 12:12:00,684 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,688 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,690 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,694 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,696 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,699 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,701 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,703 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,706 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,710 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,712 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,714 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,717 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,720 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,723 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,727 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,762 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,764 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,765 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,771 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,774 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,776 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,778 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,781 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,783 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,786 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,789 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,790 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,794 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,797 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,798 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,801 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,804 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,807 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,810 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,811 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,814 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,818 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,820 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,823 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,825 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,828 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,831 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,834 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,837 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,840 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,842 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,844 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,847 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,852 [ERROR] ownit_agent:310 工具执行异常: RuntimeError: simulated tool crash
+2026-06-12 12:12:00,860 [WARNING] ownit_agent:343 模型返回空响应
+2026-06-12 12:12:00,919 [WARNING] ownit_agent:296 工具调用次数已达上限 (50)
