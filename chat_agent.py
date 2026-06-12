@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from types import SimpleNamespace
@@ -235,7 +235,6 @@ def _request_chat_message(
             error_msg = str(exc).lower()
             if "stream_options" in error_msg and "stream_options" in request_kwargs:
                 del request_kwargs["stream_options"]
-                attempt -= 1
                 continue
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
@@ -425,10 +424,7 @@ def chat(
             return early_exit
 
 
-    if session_memory.current_turn >= MAX_TURN_LIMIT:
-        logger.warning("对话轮次已达上限 (%d)", MAX_TURN_LIMIT)
-        console.print(f"[red]Max turn limit reached ({MAX_TURN_LIMIT})[/]")
-        return ""
+    return ""
 
 def run_chat(console: Console | None = None, live_factory=Live) -> None:
     load_env_file()
